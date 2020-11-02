@@ -108,7 +108,8 @@ def main():
     else:
         scheduler_list = [torch.optim.lr_scheduler.StepLR(optimizer, args.decay_period, gamma=args.gamma) for optimizer
                           in optimizer_list]
-    best_acc_top1 = 0
+    best_acc = 0
+    best_auc = 0
     for epoch in range(args.epochs):
         [scheduler_list[i].step() for i in range(len(scheduler_list))]
         lr = scheduler_list[0].get_lr()[0]
@@ -124,13 +125,17 @@ def main():
         logging.info('train_acc %f', train_acc)
 
         cur_step = (epoch + 1) * len(train_queue)
-        valid_acc_top1, valid_obj = infer(valid_queue, model_list, criterion, epoch, cur_step)
+        valid_acc, valid_obj, valid_auc = infer(valid_queue, model_list, criterion, epoch, cur_step)
 
-        logging.info('valid_acc_top1 %f', valid_acc_top1)
+        logging.info('Valid_acc %f', valid_acc)
+        logging.info('Valid_auc %f', valid_auc)
 
-        if valid_acc_top1 > best_acc_top1:
-            best_acc_top1 = valid_acc_top1
-        logging.info('best_valid_acc_top1 %f', best_acc_top1)
+        if valid_acc > best_acc:
+            best_acc = valid_acc
+        if valid_auc > best_auc:
+            best_auc = valid_auc
+        logging.info('Best_Valid_acc %f', best_acc)
+        logging.info('Best_Valid_auc %f', best_auc)
 
 
 def train(train_queue, model_list, criterion, optimizer_list, epoch):
@@ -147,8 +152,9 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
         U_B_list = None
         if k > 1:
             U_B_list = [model_list[i](trn_X[i]) for i in range(1, len(model_list))]
-        logits = model_list[0](trn_X[0], U_B_list)
+        logits, dist_loss = model_list[0](trn_X[0], U_B_list)
         loss = criterion(logits.view(-1), target.view(-1))
+        loss = loss + 0.5 * dist_loss
         if k > 1:
             U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_list]
             model_B_weights_gradients_list = [
@@ -187,6 +193,7 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
     k = len(model_list)
     pred_list = []
     true_list = []
+    prob_list = []
     with torch.no_grad():
         for step, (val_X, val_y) in enumerate(valid_queue):
             val_X = [x.float().cuda() for x in val_X]
@@ -195,12 +202,13 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
             U_B_list = None
             if k > 1:
                 U_B_list = [model_list[i](val_X[i]) for i in range(1, len(model_list))]
-            logits = model_list[0](val_X[0], U_B_list)
+            logits, _ = model_list[0](val_X[0], U_B_list)
             loss = criterion(logits.view(-1), target.view(-1))
             prec1, label = utils.accuracy(logits, target)
             objs.update(loss.item(), n)
             top1.update(prec1, n)
             pred_list.extend(label.view(-1).cpu().detach().tolist())
+            prob_list.extend(logits.view(-1).cpu().detach().tolist())
             true_list.extend(target.view(-1).cpu().detach().tolist())
             if step % args.report_freq == 0:
                 logging.info(
@@ -208,9 +216,7 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
                     "Prec@(1,5) ({top1.avg:.1f}%)".format(
                         epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
                         top1=top1))
-    fpr, tpr, thresholds = metrics.roc_curve(
-        true_list, pred_list, pos_label=1)
-    auc = metrics.auc(fpr, tpr) * 100
+    auc = metrics.roc_auc_score(true_list, prob_list) * 100
     logging.info(
         "Valid: [{:2d}/{}] Loss {losses.avg:.3f} "
         "Prec@(1) ({top1.avg:.1f}%) AUC ({auc:.1f}%)".format(
@@ -219,7 +225,7 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
     writer.add_scalar('valid/loss', objs.avg, cur_step)
     writer.add_scalar('valid/top1', top1.avg, cur_step)
     writer.add_scalar('valid/auc', auc, cur_step)
-    return top1.avg, objs.avg
+    return top1.avg, objs.avg, auc
 
 
 if __name__ == '__main__':
