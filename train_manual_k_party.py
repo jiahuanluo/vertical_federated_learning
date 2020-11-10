@@ -13,12 +13,10 @@ import torch.utils
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
 from models.manual_k_party import Manual_A, Manual_B
-from dataset import NUS_WIDE_2_Party
-from sklearn import metrics
+from dataset import NUS_WIDE_2_Party, MultiViewDataset6Party
 
-parser = argparse.ArgumentParser("NUS_WIDE_2_Party")
-parser.add_argument('--data', type=str, default='data',
-                    help='location of the data corpus')
+parser = argparse.ArgumentParser("modelnet40v1png")
+parser.add_argument('--data', required=True, help='location of the data corpus')
 parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--batch_size', type=int, default=48, help='batch size')
 parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
@@ -26,6 +24,7 @@ parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-5, help='weight decay')
 parser.add_argument('--report_freq', type=float, default=100, help='report frequency')
 parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
+parser.add_argument('--workers', type=int, default=8, help='num of workers')
 parser.add_argument('--epochs', type=int, default=250, help='num of training epochs')
 parser.add_argument('--layers', type=int, default=50, help='total number of layers')
 parser.add_argument('--seed', type=int, default=0, help='random seed')
@@ -39,7 +38,7 @@ parser.add_argument('--k', type=int, required=True, help='num of client')
 args = parser.parse_args()
 
 args.name = 'eval/{}-{}'.format(args.name, time.strftime("%Y%m%d-%H%M%S"))
-utils.create_exp_dir(args.name, scripts_to_save=glob.glob('*.py'))
+utils.create_exp_dir(args.name, scripts_to_save=glob.glob('*/*.py') + glob.glob('*.py'))
 
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
@@ -51,8 +50,6 @@ logging.getLogger().addHandler(fh)
 # tensorboard
 writer = SummaryWriter(log_dir=os.path.join(args.name, 'tb'))
 writer.add_text('expername', args.name, 0)
-
-class_label_list = ['person', 'animal']
 
 
 def main():
@@ -70,37 +67,25 @@ def main():
     logging.info('gpu device = %d' % args.gpu)
     logging.info("args = %s", args)
 
-    model_A = Manual_A(634, u_dim=args.u_dim, k=args.k)
-    model_list = [model_A] + [Manual_B(1000, u_dim=args.u_dim) for _ in range(args.k - 1)]
+    model_A = Manual_A(u_dim=args.u_dim, k=args.k)
+    model_list = [model_A] + [Manual_B(u_dim=args.u_dim) for _ in range(args.k - 1)]
     model_list = [model.cuda() for model in model_list]
 
     for i in range(args.k):
         logging.info("model_{} param size = {}MB".format(i + 1, utils.count_parameters_in_MB(model_list[i])))
 
-    criterion = nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss()
     optimizer_list = [
         torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
         for model in model_list]
-    dataset = NUS_WIDE_2_Party(args.data, class_label_list, 'Train', 2)
-    num_train = len(dataset)
-    indices = list(range(num_train))
-    random.shuffle(indices)
-    split = int(np.floor(0.8 * num_train))
+    train_data = MultiViewDataset6Party(args.data, 'train', 224, 224, k=args.k)
+    valid_data = MultiViewDataset6Party(args.data, 'test', 224, 224, k=args.k)
     train_queue = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[:split]),
-        pin_memory=False,
-        num_workers=0
-    )
+        train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True, num_workers=args.workers)
 
     valid_queue = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        sampler=torch.utils.data.sampler.SubsetRandomSampler(indices[split:]),
-        pin_memory=False,
-        num_workers=0
-    )
+        valid_data, batch_size=args.batch_size, shuffle=False, pin_memory=True, num_workers=args.workers)
+
     if args.learning_rate == 0.025:
         scheduler_list = [
             torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, float(args.epochs))
@@ -108,8 +93,7 @@ def main():
     else:
         scheduler_list = [torch.optim.lr_scheduler.StepLR(optimizer, args.decay_period, gamma=args.gamma) for optimizer
                           in optimizer_list]
-    best_acc = 0
-    best_auc = 0
+    best_acc_top1 = 0
     for epoch in range(args.epochs):
         [scheduler_list[i].step() for i in range(len(scheduler_list))]
         lr = scheduler_list[0].get_lr()[0]
@@ -118,43 +102,47 @@ def main():
         cur_step = epoch * len(train_queue)
         writer.add_scalar('train/lr', lr, cur_step)
 
-        cur_step = epoch * len(train_queue)
-        writer.add_scalar('train/lr', lr, cur_step)
-
         train_acc, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
         logging.info('train_acc %f', train_acc)
 
         cur_step = (epoch + 1) * len(train_queue)
-        valid_acc, valid_obj, valid_auc = infer(valid_queue, model_list, criterion, epoch, cur_step)
 
-        logging.info('Valid_acc %f', valid_acc)
-        logging.info('Valid_auc %f', valid_auc)
+        valid_acc_top1, valid_acc_top5, valid_obj = infer(valid_queue, model_list, criterion, epoch, cur_step)
+        logging.info('valid_acc_top1 %f', valid_acc_top1)
+        logging.info('valid_acc_top5 %f', valid_acc_top5)
 
-        if valid_acc > best_acc:
-            best_acc = valid_acc
-        if valid_auc > best_auc:
-            best_auc = valid_auc
-        logging.info('Best_Valid_acc %f', best_acc)
-        logging.info('Best_Valid_auc %f', best_auc)
+        transfer_valid_acc_top1, transfer_valid_acc_top5, transfer_valid_obj = transfer_infer(valid_queue, model_list,
+                                                                                              criterion, epoch,
+                                                                                              cur_step)
+        logging.info('transfer_valid_acc_top1 %f', transfer_valid_acc_top1)
+        logging.info('transfer_valid_acc_top5 %f', transfer_valid_acc_top5)
+
+        if valid_acc_top1 > best_acc_top1:
+            best_acc_top1 = valid_acc_top1
+        logging.info('best_acc_top1 %f', best_acc_top1)
 
 
 def train(train_queue, model_list, criterion, optimizer_list, epoch):
     objs = utils.AvgrageMeter()
     top1 = utils.AvgrageMeter()
-    model_list = [model.train() for model in model_list]
+    top5 = utils.AvgrageMeter()
+
     cur_step = epoch * len(train_queue)
+
+    model_list = [model.train() for model in model_list]
     k = len(model_list)
+
     for step, (trn_X, trn_y) in enumerate(train_queue):
         trn_X = [x.float().cuda() for x in trn_X]
-        target = trn_y.float().cuda()
+        target = trn_y.view(-1).long().cuda()
         n = target.size(0)
         [optimizer_list[i].zero_grad() for i in range(k)]
         U_B_list = None
         if k > 1:
             U_B_list = [model_list[i](trn_X[i]) for i in range(1, len(model_list))]
         logits, dist_loss = model_list[0](trn_X[0], U_B_list)
-        loss = criterion(logits.view(-1), target.view(-1))
-        loss = loss + 0.5 * dist_loss
+        loss = criterion(logits, target)
+        loss = loss + 1 * dist_loss
         if k > 1:
             U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_list]
             model_B_weights_gradients_list = [
@@ -169,63 +157,89 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
         nn.utils.clip_grad_norm_(model_list[0].parameters(), args.grad_clip)
         optimizer_list[0].step()
 
-        prec1, _ = utils.accuracy(logits, target)
+        prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
         objs.update(loss.item(), n)
         top1.update(prec1.item(), n)
+        top5.update(prec5.item(), n)
 
         if step % args.report_freq == 0:
             logging.info(
                 "Train: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                "Prec@(1) ({top1.avg:.1f}%)".format(
+                "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
                     epoch + 1, args.epochs, step, len(train_queue) - 1, losses=objs,
-                    top1=top1))
+                    top1=top1, top5=top5))
         writer.add_scalar('train/loss', objs.avg, cur_step)
         writer.add_scalar('train/top1', top1.avg, cur_step)
+        writer.add_scalar('train/top5', top5.avg, cur_step)
         cur_step += 1
-
     return top1.avg, objs.avg
 
 
 def infer(valid_queue, model_list, criterion, epoch, cur_step):
     objs = utils.AvgrageMeter()
     top1 = utils.AvgrageMeter()
+    top5 = utils.AvgrageMeter()
     model_list = [model.eval() for model in model_list]
     k = len(model_list)
-    pred_list = []
-    true_list = []
-    prob_list = []
     with torch.no_grad():
         for step, (val_X, val_y) in enumerate(valid_queue):
             val_X = [x.float().cuda() for x in val_X]
-            target = val_y.float().cuda()
+            target = val_y.view(-1).long().cuda()
             n = target.size(0)
             U_B_list = None
             if k > 1:
                 U_B_list = [model_list[i](val_X[i]) for i in range(1, len(model_list))]
-            logits, _ = model_list[0](val_X[0], U_B_list)
-            loss = criterion(logits.view(-1), target.view(-1))
-            prec1, label = utils.accuracy(logits, target)
+            logits, dist_loss = model_list[0](val_X[0], U_B_list)
+            loss = criterion(logits, target)
+            loss = loss + 1 * dist_loss
+            prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
             objs.update(loss.item(), n)
-            top1.update(prec1, n)
-            pred_list.extend(label.view(-1).cpu().detach().tolist())
-            prob_list.extend(logits.view(-1).cpu().detach().tolist())
-            true_list.extend(target.view(-1).cpu().detach().tolist())
+            top1.update(prec1.item(), n)
+            top5.update(prec5.item(), n)
+
             if step % args.report_freq == 0:
                 logging.info(
                     "Valid: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                    "Prec@(1,5) ({top1.avg:.1f}%)".format(
+                    "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
                         epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
-                        top1=top1))
-    auc = metrics.roc_auc_score(true_list, prob_list) * 100
-    logging.info(
-        "Valid: [{:2d}/{}] Loss {losses.avg:.3f} "
-        "Prec@(1) ({top1.avg:.1f}%) AUC ({auc:.1f}%)".format(
-            epoch + 1, args.epochs, len(valid_queue) - 1, losses=objs,
-            top1=top1, auc=auc))
+                        top1=top1, top5=top5))
     writer.add_scalar('valid/loss', objs.avg, cur_step)
     writer.add_scalar('valid/top1', top1.avg, cur_step)
-    writer.add_scalar('valid/auc', auc, cur_step)
-    return top1.avg, objs.avg, auc
+    writer.add_scalar('valid/top5', top5.avg, cur_step)
+    return top1.avg, top5.avg, objs.avg
+
+
+def transfer_infer(valid_queue, model_list, criterion, epoch, cur_step):
+    objs = utils.AvgrageMeter()
+    top1 = utils.AvgrageMeter()
+    top5 = utils.AvgrageMeter()
+    model_list = [model.eval() for model in model_list]
+    k = len(model_list)
+    with torch.no_grad():
+        for step, (val_X, val_y) in enumerate(valid_queue):
+            val_X = [x.float().cuda() for x in val_X]
+            target = val_y.view(-1).long().cuda()
+            n = target.size(0)
+            U_B_list = None
+            if k > 1:
+                U_B_list = [torch.zeros([n, args.u_dim]).cuda()]
+            logits, _ = model_list[0](val_X[1], U_B_list)
+            loss = criterion(logits, target)
+            prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
+            objs.update(loss.item(), n)
+            top1.update(prec1.item(), n)
+            top5.update(prec5.item(), n)
+
+            if step % args.report_freq == 0:
+                logging.info(
+                    "Transfer Valid: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
+                    "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
+                        epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
+                        top1=top1, top5=top5))
+    writer.add_scalar('transfer_valid/loss', objs.avg, cur_step)
+    writer.add_scalar('transfer_valid/top1', top1.avg, cur_step)
+    writer.add_scalar('transfer_valid/top5', top5.avg, cur_step)
+    return top1.avg, top5.avg, objs.avg
 
 
 if __name__ == '__main__':

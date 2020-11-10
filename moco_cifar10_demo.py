@@ -27,7 +27,8 @@ parser.add_argument('--schedule', default=[120, 160], nargs='*', type=int,
                     help='learning rate schedule (when to drop lr by 10x); does not take effect if --cos is on')
 parser.add_argument('--cos', action='store_true', help='use cosine lr schedule')
 
-parser.add_argument('--batch-size', default=512, type=int, metavar='N', help='mini-batch size')
+parser.add_argument('--batch-size', default=1024, type=int, metavar='N', help='mini-batch size')
+parser.add_argument('--gpu', default='0', type=str, help='gpu device id')
 parser.add_argument('--wd', default=5e-4, type=float, metavar='W', help='weight decay')
 
 # moco specific configs:
@@ -36,7 +37,7 @@ parser.add_argument('--moco-k', default=4096, type=int, help='queue size; number
 parser.add_argument('--moco-m', default=0.99, type=float, help='moco momentum of updating key encoder')
 parser.add_argument('--moco-t', default=0.1, type=float, help='softmax temperature')
 
-parser.add_argument('--bn-splits', default=8, type=int,
+parser.add_argument('--bn-splits', default=0, type=int,
                     help='simulate multi-gpu behavior of BatchNorm in one gpu; 1 is SyncBatchNorm in multi-gpu')
 
 parser.add_argument('--symmetric', action='store_true',
@@ -292,6 +293,10 @@ class ModelMoCo(nn.Module):
         return loss
 
 
+device_ids = list(map(int, args.gpu.split(',')))
+device = torch.device('cuda:{}'.format(device_ids[0]))
+torch.cuda.set_device(device)
+
 # create model
 model = ModelMoCo(
     dim=args.moco_dim,
@@ -302,7 +307,9 @@ model = ModelMoCo(
     bn_splits=args.bn_splits,
     symmetric=args.symmetric,
 ).cuda()
-print(model.encoder_q)
+
+
+# print(model.encoder_q)
 
 
 # train for one epoch

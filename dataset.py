@@ -36,7 +36,6 @@ class NUS_WIDE_2_Party:
                 neg_count += 1
         self.y = np.expand_dims(y_, axis=1)
 
-
     def find_class(self):
         dfs = []
         label_path = "NUS_WIDE/Groundtruth/TrainTestLabels/"
@@ -80,6 +79,60 @@ class NUS_WIDE_2_Party:
         y = self.y[index]
 
         return [x_a, x_b], y
+
+
+class MultiViewDataset6Party:
+    def __init__(self, data_dir, data_type, height, width, k):
+        self.x = []  # the datapath of k different png files
+        self.y = []  # the corresponding label
+        self.data_dir = data_dir
+        self.height = height
+        self.width = width
+        self.k = k
+        self.transform = transforms.Compose([
+            transforms.Resize((height, width)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.89156885, 0.89156885, 0.89156885],
+                                 std=[0.18063523, 0.18063523, 0.18063523]),
+        ])
+
+        self.classes, self.class_to_idx = self.find_class(data_dir)
+        subfixes = ['_' + str(i).zfill(3) + '.png' for i in range(1, 13)]
+        for label in self.classes:
+            all_files = [d for d in os.listdir(os.path.join(data_dir, label, data_type))]
+            all_off_files = [item.split('.')[0] for item in all_files if item[-3:] == 'off']
+            all_off_files = sorted(list(set(all_off_files)))
+            for single_off_file in all_off_files:
+                all_views = [single_off_file + sg_subfix for sg_subfix in subfixes]
+                all_views = [os.path.join(data_dir, label, data_type, item) for item in all_views]
+                for i in range(2):
+                    sample = [all_views[j + i * 6] for j in range(0, k)]
+                    self.x.append(sample)
+                    self.y.append([self.class_to_idx[label]])
+        self.x = np.array(self.x)
+        self.y = np.array(self.y)
+
+    def find_class(self, dir):
+        classes = [d for d in os.listdir(dir) if os.path.isdir(os.path.join(dir, d))]
+        classes.sort()
+        class_to_idx = {classes[i]: i for i in range(len(classes))}
+        return classes, class_to_idx
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, indexx):  # this is single_indexx
+        _views = self.x[indexx]
+        data = []
+        labels = []
+        for index in range(self.k):
+            img = Image.open(_views[index])
+            if self.transform is not None:
+                img = self.transform(img)
+            data.append(img)
+        labels.append(self.y[indexx])
+
+        return data, np.array(labels).ravel()
 
 
 def test_dataset():
