@@ -19,7 +19,7 @@ parser = argparse.ArgumentParser("modelnet40v1png")
 parser.add_argument('--data', required=True, help='location of the data corpus')
 parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--batch_size', type=int, default=48, help='batch size')
-parser.add_argument('--learning_rate', type=float, default=0.1, help='init learning rate')
+parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-5, help='weight decay')
 parser.add_argument('--report_freq', type=float, default=100, help='report frequency')
@@ -37,7 +37,7 @@ parser.add_argument('--k', type=int, required=True, help='num of client')
 
 args = parser.parse_args()
 
-args.name = 'eval/{}-{}'.format(args.name, time.strftime("%Y%m%d-%H%M%S"))
+args.name = 'expername/{}-{}'.format(args.name, time.strftime("%Y%m%d-%H%M%S"))
 utils.create_exp_dir(args.name, scripts_to_save=glob.glob('*/*.py') + glob.glob('*.py'))
 
 log_format = '%(asctime)s %(message)s'
@@ -51,24 +51,26 @@ logging.getLogger().addHandler(fh)
 writer = SummaryWriter(log_dir=os.path.join(args.name, 'tb'))
 writer.add_text('expername', args.name, 0)
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def main():
-    if not torch.cuda.is_available():
-        logging.info('no gpu device available')
-        sys.exit(1)
+    # if not torch.cuda.is_available():
+    #     logging.info('no gpu device available')
+    #     sys.exit(1)
 
     np.random.seed(args.seed)
     random.seed(args.seed)
-    torch.cuda.set_device(args.gpu)
-    cudnn.benchmark = True
     torch.manual_seed(args.seed)
-    cudnn.enabled = True
-    torch.cuda.manual_seed_all(args.seed)
-    logging.info('gpu device = %d' % args.gpu)
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
+        cudnn.benchmark = True
+        cudnn.enabled = True
+        torch.cuda.manual_seed_all(args.seed)
+        logging.info('gpu device = %d' % args.gpu)
     logging.info("args = %s", args)
 
-    model_A = Manual_A(u_dim=args.u_dim, k=args.k)
-    model_list = [model_A] + [Manual_B(u_dim=args.u_dim) for _ in range(args.k - 1)]
+    model_A = Manual_A(num_classes=40, layers=args.layers, u_dim=args.u_dim, k=args.k)
+    model_list = [model_A] + [Manual_B(layers=args.layers, u_dim=args.u_dim) for _ in range(args.k - 1)]
     model_list = [model.cuda() for model in model_list]
 
     for i in range(args.k):
@@ -78,8 +80,8 @@ def main():
     optimizer_list = [
         torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
         for model in model_list]
-    train_data = MultiViewDataset6Party(args.data, 'train', 224, 224, k=args.k)
-    valid_data = MultiViewDataset6Party(args.data, 'test', 224, 224, k=args.k)
+    train_data = MultiViewDataset6Party(args.data, 'train', 32, 32, k=args.k)
+    valid_data = MultiViewDataset6Party(args.data, 'test', 32, 32, k=args.k)
     train_queue = torch.utils.data.DataLoader(
         train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True, num_workers=args.workers)
 
@@ -88,7 +90,7 @@ def main():
 
     if args.learning_rate == 0.025:
         scheduler_list = [
-            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, float(args.epochs))
+            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
             for optimizer in optimizer_list]
     else:
         scheduler_list = [torch.optim.lr_scheduler.StepLR(optimizer, args.decay_period, gamma=args.gamma) for optimizer
@@ -96,7 +98,7 @@ def main():
     best_acc_top1 = 0
     for epoch in range(args.epochs):
         [scheduler_list[i].step() for i in range(len(scheduler_list))]
-        lr = scheduler_list[0].get_lr()[0]
+        lr = scheduler_list[0].get_last_lr()[0]
         logging.info('epoch %d lr %e', epoch, lr)
 
         cur_step = epoch * len(train_queue)
@@ -111,11 +113,11 @@ def main():
         logging.info('valid_acc_top1 %f', valid_acc_top1)
         logging.info('valid_acc_top5 %f', valid_acc_top5)
 
-        transfer_valid_acc_top1, transfer_valid_acc_top5, transfer_valid_obj = transfer_infer(valid_queue, model_list,
-                                                                                              criterion, epoch,
-                                                                                              cur_step)
-        logging.info('transfer_valid_acc_top1 %f', transfer_valid_acc_top1)
-        logging.info('transfer_valid_acc_top5 %f', transfer_valid_acc_top5)
+        # transfer_valid_acc_top1, transfer_valid_acc_top5, transfer_valid_obj = transfer_infer(valid_queue, model_list,
+        #                                                                                       criterion, epoch,
+        #                                                                                       cur_step)
+        # logging.info('transfer_valid_acc_top1 %f', transfer_valid_acc_top1)
+        # logging.info('transfer_valid_acc_top5 %f', transfer_valid_acc_top5)
 
         if valid_acc_top1 > best_acc_top1:
             best_acc_top1 = valid_acc_top1
@@ -138,9 +140,12 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
         n = target.size(0)
         [optimizer_list[i].zero_grad() for i in range(k)]
         U_B_list = None
+        U_B_clone_list = None
         if k > 1:
             U_B_list = [model_list[i](trn_X[i]) for i in range(1, len(model_list))]
-        logits, dist_loss = model_list[0](trn_X[0], U_B_list)
+            U_B_clone_list = [U_B.detach().clone() for U_B in U_B_list]
+            U_B_clone_list = [torch.autograd.Variable(U_B, requires_grad=True) for U_B in U_B_clone_list]
+        logits, dist_loss = model_list[0](trn_X[0], U_B_clone_list)
         loss = criterion(logits, target)
         loss = loss + 1 * dist_loss
         if k > 1:
