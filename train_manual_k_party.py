@@ -71,7 +71,7 @@ def main():
 
     model_A = Manual_A(num_classes=40, layers=args.layers, u_dim=args.u_dim, k=args.k)
     model_list = [model_A] + [Manual_B(layers=args.layers, u_dim=args.u_dim) for _ in range(args.k - 1)]
-    model_list = [model.cuda() for model in model_list]
+    model_list = [model.to(device) for model in model_list]
 
     for i in range(args.k):
         logging.info("model_{} param size = {}MB".format(i + 1, utils.count_parameters_in_MB(model_list[i])))
@@ -135,8 +135,8 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
     k = len(model_list)
 
     for step, (trn_X, trn_y) in enumerate(train_queue):
-        trn_X = [x.float().cuda() for x in trn_X]
-        target = trn_y.view(-1).long().cuda()
+        trn_X = [x.float().to(device) for x in trn_X]
+        target = trn_y.view(-1).long().to(device)
         n = target.size(0)
         [optimizer_list[i].zero_grad() for i in range(k)]
         U_B_list = None
@@ -188,8 +188,8 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
     k = len(model_list)
     with torch.no_grad():
         for step, (val_X, val_y) in enumerate(valid_queue):
-            val_X = [x.float().cuda() for x in val_X]
-            target = val_y.view(-1).long().cuda()
+            val_X = [x.float().to(device) for x in val_X]
+            target = val_y.view(-1).long().to(device)
             n = target.size(0)
             U_B_list = None
             if k > 1:
@@ -222,12 +222,12 @@ def transfer_infer(valid_queue, model_list, criterion, epoch, cur_step):
     k = len(model_list)
     with torch.no_grad():
         for step, (val_X, val_y) in enumerate(valid_queue):
-            val_X = [x.float().cuda() for x in val_X]
-            target = val_y.view(-1).long().cuda()
+            val_X = [x.float().to(device) for x in val_X]
+            target = val_y.view(-1).long().to(device)
             n = target.size(0)
             U_B_list = None
             if k > 1:
-                U_B_list = [torch.zeros([n, args.u_dim]).cuda()]
+                U_B_list = [torch.zeros([n, args.u_dim]).to(device)]
             logits, _ = model_list[0](val_X[1], U_B_list)
             loss = criterion(logits, target)
             prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
