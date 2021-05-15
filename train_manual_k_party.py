@@ -145,9 +145,8 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
             U_B_list = [model_list[i](trn_X[i]) for i in range(1, len(model_list))]
             U_B_clone_list = [U_B.detach().clone() for U_B in U_B_list]
             U_B_clone_list = [torch.autograd.Variable(U_B, requires_grad=True) for U_B in U_B_clone_list]
-        logits, dist_loss = model_list[0](trn_X[0], U_B_clone_list)
+        logits = model_list[0](trn_X[0], U_B_clone_list)
         loss = criterion(logits, target)
-        loss = loss + 1 * dist_loss
         if k > 1:
             U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_list]
             model_B_weights_gradients_list = [
@@ -194,9 +193,8 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
             U_B_list = None
             if k > 1:
                 U_B_list = [model_list[i](val_X[i]) for i in range(1, len(model_list))]
-            logits, dist_loss = model_list[0](val_X[0], U_B_list)
+            logits = model_list[0](val_X[0], U_B_list)
             loss = criterion(logits, target)
-            loss = loss + 1 * dist_loss
             prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
             objs.update(loss.item(), n)
             top1.update(prec1.item(), n)
