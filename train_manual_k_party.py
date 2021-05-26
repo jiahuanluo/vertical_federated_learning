@@ -18,15 +18,15 @@ from dataset import NUS_WIDE_2_Party, MultiViewDataset6Party
 parser = argparse.ArgumentParser("modelnet40v1png")
 parser.add_argument('--data', required=True, help='location of the data corpus')
 parser.add_argument('--name', type=str, required=True, help='experiment name')
-parser.add_argument('--batch_size', type=int, default=48, help='batch size')
+parser.add_argument('--batch_size', type=int, default=32, help='batch size')
 parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-5, help='weight decay')
-parser.add_argument('--report_freq', type=float, default=100, help='report frequency')
+parser.add_argument('--report_freq', type=float, default=10, help='report frequency')
 parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
-parser.add_argument('--workers', type=int, default=8, help='num of workers')
+parser.add_argument('--workers', type=int, default=0, help='num of workers')
 parser.add_argument('--epochs', type=int, default=250, help='num of training epochs')
-parser.add_argument('--layers', type=int, default=50, help='total number of layers')
+parser.add_argument('--layers', type=int, default=18, help='total number of layers')
 parser.add_argument('--seed', type=int, default=0, help='random seed')
 parser.add_argument('--grad_clip', type=float, default=5., help='gradient clipping')
 parser.add_argument('--gamma', type=float, default=0.97, help='learning rate decay')
@@ -37,7 +37,7 @@ parser.add_argument('--k', type=int, required=True, help='num of client')
 
 args = parser.parse_args()
 
-args.name = 'expername/{}-{}'.format(args.name, time.strftime("%Y%m%d-%H%M%S"))
+args.name = 'experiments/{}-{}'.format(args.name, time.strftime("%Y%m%d-%H%M%S"))
 utils.create_exp_dir(args.name, scripts_to_save=glob.glob('*/*.py') + glob.glob('*.py'))
 
 log_format = '%(asctime)s %(message)s'
@@ -78,7 +78,8 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer_list = [
-        torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+        # torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+        torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay)
         for model in model_list]
     train_data = MultiViewDataset6Party(args.data, 'train', 32, 32, k=args.k)
     valid_data = MultiViewDataset6Party(args.data, 'test', 32, 32, k=args.k)
@@ -97,7 +98,6 @@ def main():
                           in optimizer_list]
     best_acc_top1 = 0
     for epoch in range(args.epochs):
-        [scheduler_list[i].step() for i in range(len(scheduler_list))]
         lr = scheduler_list[0].get_last_lr()[0]
         logging.info('epoch %d lr %e', epoch, lr)
 
@@ -105,6 +105,7 @@ def main():
         writer.add_scalar('train/lr', lr, cur_step)
 
         train_acc, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
+        # [scheduler_list[i].step() for i in range(len(scheduler_list))]
         logging.info('train_acc %f', train_acc)
 
         cur_step = (epoch + 1) * len(train_queue)
