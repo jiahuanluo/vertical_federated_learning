@@ -25,7 +25,7 @@ parser.add_argument('--weight_decay', type=float, default=3e-5, help='weight dec
 parser.add_argument('--report_freq', type=float, default=10, help='report frequency')
 parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
 parser.add_argument('--workers', type=int, default=0, help='num of workers')
-parser.add_argument('--epochs', type=int, default=250, help='num of training epochs')
+parser.add_argument('--epochs', type=int, default=50, help='num of training epochs')
 parser.add_argument('--layers', type=int, default=18, help='total number of layers')
 parser.add_argument('--seed', type=int, default=0, help='random seed')
 parser.add_argument('--grad_clip', type=float, default=5., help='gradient clipping')
@@ -78,16 +78,16 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer_list = [
-        # torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
-        torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay)
+        torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+        # torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay)
         for model in model_list]
     train_data = MultiViewDataset6Party(args.data, 'train', 32, 32, k=args.k)
     valid_data = MultiViewDataset6Party(args.data, 'test', 32, 32, k=args.k)
     train_queue = torch.utils.data.DataLoader(
-        train_data, batch_size=args.batch_size, shuffle=True, pin_memory=True, num_workers=args.workers)
+        train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
 
     valid_queue = torch.utils.data.DataLoader(
-        valid_data, batch_size=args.batch_size, shuffle=False, pin_memory=True, num_workers=args.workers)
+        valid_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
 
     if args.learning_rate == 0.025:
         scheduler_list = [
@@ -105,7 +105,7 @@ def main():
         writer.add_scalar('train/lr', lr, cur_step)
 
         train_acc, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
-        # [scheduler_list[i].step() for i in range(len(scheduler_list))]
+        [scheduler_list[i].step() for i in range(len(scheduler_list))]
         logging.info('train_acc %f', train_acc)
 
         cur_step = (epoch + 1) * len(train_queue)
@@ -149,7 +149,7 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
         logits = model_list[0](trn_X[0], U_B_clone_list)
         loss = criterion(logits, target)
         if k > 1:
-            U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_list]
+            U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_clone_list]
             model_B_weights_gradients_list = [
                 torch.autograd.grad(U_B_list[i], model_list[i + 1].parameters(), grad_outputs=U_B_gradients_list[i],
                                     retain_graph=True) for i in range(len(U_B_gradients_list))]
