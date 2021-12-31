@@ -1,0 +1,3 @@
+python train_transformer_k_party.py  --data ./data --name mosei_1_party_adam --k 1 --batch_size 128 --gpu 0 --learning_rate 1e-3 --grad_clip 0.8 &
+python train_transformer_k_party.py  --data ./data --name mosei_2_party_adam --k 2 --batch_size 128 --gpu 1 --learning_rate 1e-3 --grad_clip 0.8 &
+python train_transformer_k_party.py  --data ./data --name mosei_3_party_adam --k 3 --batch_size 128 --gpu 2 --learning_rate 1e-3 --grad_clip 0.8 &
