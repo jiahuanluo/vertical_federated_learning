@@ -1,13 +1,12 @@
 import torch.nn as nn
-from torchvision import models
 import torch
 from models.transformer import TransformerEncoder
 
 
 class Manual_A(nn.Module):
-    def __init__(self, num_classes, layers, u_dim=30, k=2):
+    def __init__(self, num_classes, input_dim ,layers, u_dim=30, k=2):
         super(Manual_A, self).__init__()
-        self.conv1 = nn.Conv1d(300, 30, kernel_size=1, padding=0, bias=False)
+        self.conv1 = nn.Conv1d(input_dim, 30, kernel_size=1, padding=0, bias=False)
         self.net = TransformerEncoder(embed_dim=30, num_heads=5, layers=5)
         self.proj1 = nn.Linear(30, 30)
         self.relu = nn.ReLU()

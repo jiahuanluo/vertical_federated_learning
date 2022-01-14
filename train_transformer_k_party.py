@@ -30,10 +30,12 @@ parser.add_argument('--layers', type=int, default=18, help='total number of laye
 parser.add_argument('--seed', type=int, default=0, help='random seed')
 parser.add_argument('--grad_clip', type=float, default=5., help='gradient clipping')
 parser.add_argument('--gamma', type=float, default=0.97, help='learning rate decay')
-parser.add_argument('--decay_period', type=int, default=1, help='epochs between two learning rate decays')
+parser.add_argument('--decay_period', type=int, default=100, help='epochs between two learning rate decays')
 parser.add_argument('--parallel', action='store_true', default=False, help='data parallelism')
 parser.add_argument('--u_dim', type=int, default=64, help='u layer dimensions')
 parser.add_argument('--k', type=int, required=True, help='num of client')
+parser.add_argument('--ratio', type=float, default=1.0, help='portion of train samples')
+parser.add_argument('--optimizer', type=str, default='adam', choices=['sgd', 'adam'], help='optimizer')
 
 args = parser.parse_args()
 
@@ -43,7 +45,9 @@ utils.create_exp_dir(args.name, scripts_to_save=glob.glob('*/*.py') + glob.glob(
 log_format = '%(asctime)s %(message)s'
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join(args.name, 'log.txt'))
+exp_name = f'{args.k}_party_{args.optimizer}_lr{args.learning_rate}_bz{args.batch_size}_epochs_{args.epochs}_ratio_' \
+           f'{args.ratio}.txt'
+fh = logging.FileHandler(os.path.join(args.name, exp_name))
 fh.setFormatter(logging.Formatter(log_format))
 logging.getLogger().addHandler(fh)
 
@@ -52,6 +56,7 @@ writer = SummaryWriter(log_dir=os.path.join(args.name, 'tb'))
 writer.add_text('expername', args.name, 0)
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 
 def main():
     # if not torch.cuda.is_available():
@@ -68,15 +73,15 @@ def main():
         torch.cuda.manual_seed_all(args.seed)
         logging.info('gpu device = %d' % args.gpu)
     logging.info("args = %s", args)
-    model_A = Manual_A(num_classes=1, layers=args.layers, u_dim=30, k=args.k)
+    model_A = Manual_A(num_classes=1, input_dim=35, layers=args.layers, u_dim=30, k=args.k)
     if args.k == 1:
         model_list = [model_A]
     elif args.k == 2:
-        model_B = Manual_B(input_dim=74)
+        model_B = Manual_B(input_dim=300)
         model_list = [model_A, model_B]
     elif args.k == 3:
-        model_B = Manual_B(input_dim=74)
-        model_C = Manual_B(input_dim=35)
+        model_B = Manual_B(input_dim=300)
+        model_C = Manual_B(input_dim=74)
         model_list = [model_A, model_B, model_C]
     else:
         assert ValueError
@@ -88,12 +93,13 @@ def main():
 
     # criterion = nn.CrossEntropyLoss()
     criterion = nn.L1Loss()
-    optimizer_list = [
-        # torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
-        torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay)
-        for model in model_list]
-    train_data = Multimodal_Datasets(args.data, split_type='train')
-    valid_data = Multimodal_Datasets(args.data, split_type='train')
+    if args.optimizer == "sgd":
+        optimizer_list = [torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum,
+                                          weight_decay=args.weight_decay) for model in model_list]
+    else:
+        optimizer_list = [torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay) for model in model_list]
+    train_data = Multimodal_Datasets(args.data, split_type='train', ratio=args.ratio)
+    valid_data = Multimodal_Datasets(args.data, split_type='test')
     train_queue = torch.utils.data.DataLoader(
         train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=True)
 
@@ -107,7 +113,9 @@ def main():
     else:
         scheduler_list = [torch.optim.lr_scheduler.StepLR(optimizer, args.decay_period, gamma=args.gamma) for optimizer
                           in optimizer_list]
-    best_acc_top1 = 0
+
+    best_f1 = 0
+    best_acc = 0
     for epoch in range(args.epochs):
         lr = scheduler_list[0].get_last_lr()[0]
         logging.info('epoch %d lr %e', epoch, lr)
@@ -115,15 +123,15 @@ def main():
         cur_step = epoch * len(train_queue)
         writer.add_scalar('train/lr', lr, cur_step)
 
-        train_acc, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
+        train_f1, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
         [scheduler_list[i].step() for i in range(len(scheduler_list))]
-        logging.info('train_acc %f', train_acc)
+        logging.info('train_f1 %f', train_f1)
 
         cur_step = (epoch + 1) * len(train_queue)
 
-        valid_acc_top1, valid_acc_top5, valid_obj = infer(valid_queue, model_list, criterion, epoch, cur_step)
-        logging.info('valid_acc_top1 %f', valid_acc_top1)
-        logging.info('valid_acc_top5 %f', valid_acc_top5)
+        valid_f1, valid_acc, valid_obj = infer(valid_queue, model_list, criterion, epoch, cur_step)
+        logging.info('valid_f1 %f', valid_f1)
+        logging.info('valid_acc %f', valid_acc)
 
         # transfer_valid_acc_top1, transfer_valid_acc_top5, transfer_valid_obj = transfer_infer(valid_queue, model_list,
         #                                                                                       criterion, epoch,
@@ -131,15 +139,18 @@ def main():
         # logging.info('transfer_valid_acc_top1 %f', transfer_valid_acc_top1)
         # logging.info('transfer_valid_acc_top5 %f', transfer_valid_acc_top5)
 
-        if valid_acc_top1 > best_acc_top1:
-            best_acc_top1 = valid_acc_top1
-        logging.info('best_acc_top1 %f', best_acc_top1)
+        if valid_f1 > best_f1:
+            best_f1 = valid_f1
+        if valid_acc > best_acc:
+            best_acc = valid_acc
+        logging.info('best_f1 %f', best_f1)
+        logging.info('best_acc %f', best_acc)
 
 
 def train(train_queue, model_list, criterion, optimizer_list, epoch):
     objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
+    f1 = utils.AvgrageMeter()
+    acc = utils.AvgrageMeter()
 
     cur_step = epoch * len(train_queue)
 
@@ -176,26 +187,26 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
 
         prec1, prec5 = utils.eval_mosei_senti(results=logits, truths=target, exclude_zero=True)
         objs.update(loss.item(), n)
-        top1.update(prec1.item(), n)
-        top5.update(prec5.item(), n)
+        f1.update(prec1.item(), n)
+        acc.update(prec5.item(), n)
 
         if step % args.report_freq == 0:
             logging.info(
                 "Train: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
+                "Prec@(1,5) ({f1.avg:.1f}%, {acc.avg:.1f}%)".format(
                     epoch + 1, args.epochs, step, len(train_queue) - 1, losses=objs,
-                    top1=top1, top5=top5))
+                    f1=f1, acc=acc))
         writer.add_scalar('train/loss', objs.avg, cur_step)
-        writer.add_scalar('train/top1', top1.avg, cur_step)
-        writer.add_scalar('train/top5', top5.avg, cur_step)
+        writer.add_scalar('train/f1', f1.avg, cur_step)
+        writer.add_scalar('train/acc', acc.avg, cur_step)
         cur_step += 1
-    return top1.avg, objs.avg
+    return f1.avg, objs.avg
 
 
 def infer(valid_queue, model_list, criterion, epoch, cur_step):
     objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
+    f1 = utils.AvgrageMeter()
+    acc = utils.AvgrageMeter()
     model_list = [model.eval() for model in model_list]
     k = len(model_list)
     with torch.no_grad():
@@ -211,19 +222,19 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
             loss = criterion(logits, target)
             prec1, prec5 = utils.eval_mosei_senti(results=logits, truths=target, exclude_zero=True)
             objs.update(loss.item(), n)
-            top1.update(prec1.item(), n)
-            top5.update(prec5.item(), n)
+            f1.update(prec1.item(), n)
+            acc.update(prec5.item(), n)
 
             if step % args.report_freq == 0:
                 logging.info(
                     "Valid: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                    "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
+                    "Prec@(1,5) ({f1.avg:.1f}%, {acc.avg:.1f}%)".format(
                         epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
-                        top1=top1, top5=top5))
+                        f1=f1, acc=acc))
     writer.add_scalar('valid/loss', objs.avg, cur_step)
-    writer.add_scalar('valid/top1', top1.avg, cur_step)
-    writer.add_scalar('valid/top5', top5.avg, cur_step)
-    return top1.avg, top5.avg, objs.avg
+    writer.add_scalar('valid/f1', f1.avg, cur_step)
+    writer.add_scalar('valid/acc', acc.avg, cur_step)
+    return f1.avg, acc.avg, objs.avg
 
 
 def transfer_infer(valid_queue, model_list, criterion, epoch, cur_step):

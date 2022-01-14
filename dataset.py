@@ -13,11 +13,10 @@ import pickle
 from torch.utils.data import Dataset
 
 class Multimodal_Datasets(Dataset):
-    def __init__(self, dataset_path, data='mosei_senti', split_type='train', if_align=True):
+    def __init__(self, dataset_path, data='mosei_senti', split_type='train', if_align=True, ratio=0.1):
         super(Multimodal_Datasets, self).__init__()
         dataset_path = os.path.join(dataset_path, data + '_data.pkl' if if_align else data + '_data_noalign.pkl')
         dataset = pickle.load(open(dataset_path, 'rb'))
-
         # These are torch tensors
         self.vision = torch.tensor(dataset[split_type]['vision'].astype(np.float32)).cpu().detach()
         self.text = torch.tensor(dataset[split_type]['text'].astype(np.float32)).cpu().detach()
@@ -25,7 +24,17 @@ class Multimodal_Datasets(Dataset):
         self.audio[self.audio == -np.inf] = 0
         self.audio = torch.tensor(self.audio).cpu().detach()
         self.labels = torch.tensor(dataset[split_type]['labels'].astype(np.float32)).cpu().detach()
-
+        if split_type == "train":
+            if ratio < 1:
+                sample_idx = np.random.choice(np.arange(len(self.labels)), size=int(ratio * len(self.labels)))
+            elif ratio == 1:
+                sample_idx = np.arange(len(self.labels))
+            else:
+                sample_idx = np.random.shuffle(np.arange(len(self.labels)))[:ratio]
+            self.text = self.text[sample_idx]
+            self.audio = self.audio[sample_idx]
+            self.vision = self.vision[sample_idx]
+            self.labels = self.labels[sample_idx]
         # Note: this is STILL an numpy array
         self.meta = dataset[split_type]['id'] if 'id' in dataset[split_type].keys() else None
 
@@ -50,7 +59,8 @@ class Multimodal_Datasets(Dataset):
         return len(self.labels)
 
     def __getitem__(self, index):
-        X = (self.text[index], self.audio[index], self.vision[index])
+        # X = (self.text[index], self.audio[index], self.vision[index])
+        X = (self.vision[index], self.text[index], self.audio[index])
         Y = self.labels[index]
         META = (0, 0, 0) if self.meta is None else (self.meta[index][0], self.meta[index][1], self.meta[index][2])
         if self.data == 'mosi':
@@ -132,7 +142,7 @@ class NUS_WIDE_2_Party:
 
 
 class MultiViewDataset6Party:
-    def __init__(self, data_dir, data_type, height, width, k):
+    def __init__(self, data_dir, data_type, height, width, k, ratio=0.1):
         self.x = []  # the datapath of k different png files
         self.y = []  # the corresponding label
         self.data_dir = data_dir
@@ -159,8 +169,15 @@ class MultiViewDataset6Party:
                     sample = [all_views[j + i * 6] for j in range(0, k)]
                     self.x.append(sample)
                     self.y.append([self.class_to_idx[label]])
-        self.x = np.array(self.x)
-        self.y = np.array(self.y)
+        if ratio < 1:
+            sample_idx = np.random.choice(np.arange(len(self.x)), size=int(ratio * len(self.x)))
+        elif ratio == 1:
+            sample_idx = np.arange(len(self.x))
+        else:
+            sample_idx = np.random.shuffle(np.arange(len(self.x)))[:ratio]
+
+        self.x = np.array(self.x)[sample_idx]
+        self.y = np.array(self.y)[sample_idx]
 
     def find_class(self, dir):
         classes = [d for d in os.listdir(dir) if os.path.isdir(os.path.join(dir, d))]
