@@ -237,38 +237,5 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
     return f1.avg, acc.avg, objs.avg
 
 
-def transfer_infer(valid_queue, model_list, criterion, epoch, cur_step):
-    objs = utils.AvgrageMeter()
-    top1 = utils.AvgrageMeter()
-    top5 = utils.AvgrageMeter()
-    model_list = [model.eval() for model in model_list]
-    k = len(model_list)
-    with torch.no_grad():
-        for step, (val_X, val_y) in enumerate(valid_queue):
-            val_X = [x.float().to(device) for x in val_X]
-            target = val_y.view(-1).long().to(device)
-            n = target.size(0)
-            U_B_list = None
-            if k > 1:
-                U_B_list = [torch.zeros([n, args.u_dim]).to(device)]
-            logits, _ = model_list[0](val_X[1], U_B_list)
-            loss = criterion(logits, target)
-            prec1, prec5 = utils.accuracy(logits, target, topk=(1, 5))
-            objs.update(loss.item(), n)
-            top1.update(prec1.item(), n)
-            top5.update(prec5.item(), n)
-
-            if step % args.report_freq == 0:
-                logging.info(
-                    "Transfer Valid: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                    "Prec@(1,5) ({top1.avg:.1f}%, {top5.avg:.1f}%)".format(
-                        epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
-                        top1=top1, top5=top5))
-    writer.add_scalar('transfer_valid/loss', objs.avg, cur_step)
-    writer.add_scalar('transfer_valid/top1', top1.avg, cur_step)
-    writer.add_scalar('transfer_valid/top5', top5.avg, cur_step)
-    return top1.avg, top5.avg, objs.avg
-
-
 if __name__ == '__main__':
     main()

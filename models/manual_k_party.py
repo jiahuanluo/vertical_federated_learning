@@ -1,20 +1,20 @@
 import torch.nn as nn
-from torchvision import models
+from . import resnet as models
 import torch
 
 
 class Manual_A(nn.Module):
 
-    def __init__(self, num_classes, layers, u_dim=64, k=2):
+    def __init__(self, num_classes, layers, in_channel=3, u_dim=64, k=2, width=1):
         super(Manual_A, self).__init__()
         if layers == 18:
-            self.net = models.resnet18(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet18(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 34:
-            self.net = models.resnet34(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet34(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 50:
-            self.net = models.resnet50(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet50(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 101:
-            self.net = models.resnet101(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet101(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 19:
             self.net = models.mobilenet_v2(pretrained=False, num_classes=u_dim)
         elif layers == 51:
@@ -35,16 +35,16 @@ class Manual_A(nn.Module):
 
 class Manual_B(nn.Module):
 
-    def __init__(self, layers, u_dim=64):
+    def __init__(self, layers, in_channel=3, u_dim=64, width=1):
         super(Manual_B, self).__init__()
         if layers == 18:
-            self.net = models.resnet18(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet18(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 34:
-            self.net = models.resnet34(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet34(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 50:
-            self.net = models.resnet50(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet50(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 101:
-            self.net = models.resnet101(pretrained=False, num_classes=u_dim)
+            self.net = models.resnet101(pretrained=False, low_dim=u_dim, in_channel=in_channel, width=width)
         elif layers == 19:
             self.net = models.mobilenet_v2(pretrained=False, num_classes=u_dim)
         elif layers == 51:

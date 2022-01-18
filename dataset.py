@@ -1,16 +1,86 @@
 # encoding: utf-8
 
 import os
-import numpy as np
 from PIL import Image
-import torch
 from torchvision import transforms
-import random
-import cv2
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 import pickle
 from torch.utils.data import Dataset
+
+import numpy as np
+from skimage import color
+
+import torch
+import torchvision.datasets as datasets
+
+def get_train_dataset(data_folder,):
+    """get the train loader"""
+    data_folder = os.path.join(data_folder, 'train')
+
+    mean = [(0 + 100) / 2, (-86.183 + 98.233) / 2, (-107.857 + 94.478) / 2]
+    std = [(100 - 0) / 2, (86.183 + 98.233) / 2, (107.857 + 94.478) / 2]
+    color_transfer = RGB2Lab()
+    normalize = transforms.Normalize(mean=mean, std=std)
+
+    train_transform = transforms.Compose([
+        transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+        transforms.RandomHorizontalFlip(),
+        color_transfer,
+        transforms.ToTensor(),
+        normalize,
+    ])
+    train_dataset = ImageFolderInstance(data_folder, transform=train_transform)
+    # train_sampler = None
+    #
+    # # train loader
+    # train_loader = torch.utils.data.DataLoader(
+    #     train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+    #     num_workers=args.num_workers, pin_memory=True, sampler=train_sampler)
+    #
+    # # num of samples
+    # n_data = len(train_dataset)
+    # print('number of samples: {}'.format(n_data))
+
+    return train_dataset
+
+class ImageFolderInstance(datasets.ImageFolder):
+    """Folder datasets which returns the index of the image as well
+    """
+
+    def __init__(self, root, transform=None, target_transform=None, two_crop=False):
+        super(ImageFolderInstance, self).__init__(root, transform, target_transform)
+        self.two_crop = two_crop
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index (int): Index
+        Returns:
+            tuple: (image, target, index) where target is class_index of the target class.
+        """
+        path, target = self.imgs[index]
+        image = self.loader(path)
+        if self.transform is not None:
+            img = self.transform(image)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        if self.two_crop:
+            img2 = self.transform(image)
+            img = torch.cat([img, img2], dim=0)
+
+        return img, target
+
+
+class RGB2Lab(object):
+    """Convert RGB PIL image to ndarray Lab."""
+    def __call__(self, img):
+        img = np.asarray(img, np.uint8)
+        img = color.rgb2lab(img)
+        return img
+
+
 
 class Multimodal_Datasets(Dataset):
     def __init__(self, dataset_path, data='mosei_senti', split_type='train', if_align=True, ratio=0.1):
