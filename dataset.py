@@ -27,22 +27,36 @@ def get_train_dataset(data_folder,):
         transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
         transforms.RandomHorizontalFlip(),
         color_transfer,
+        transforms.Resize((224, 224)),
         transforms.ToTensor(),
         normalize,
     ])
     train_dataset = ImageFolderInstance(data_folder, transform=train_transform)
-    # train_sampler = None
-    #
-    # # train loader
-    # train_loader = torch.utils.data.DataLoader(
-    #     train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-    #     num_workers=args.num_workers, pin_memory=True, sampler=train_sampler)
-    #
-    # # num of samples
-    # n_data = len(train_dataset)
-    # print('number of samples: {}'.format(n_data))
-
+    # num of samples
+    n_data = len(train_dataset)
+    print('number of training samples: {}'.format(n_data))
     return train_dataset
+
+def get_val_dataset(data_folder,):
+    """get the train loader"""
+    data_folder = os.path.join(data_folder, 'val')
+
+    mean = [(0 + 100) / 2, (-86.183 + 98.233) / 2, (-107.857 + 94.478) / 2]
+    std = [(100 - 0) / 2, (86.183 + 98.233) / 2, (107.857 + 94.478) / 2]
+    color_transfer = RGB2Lab()
+    normalize = transforms.Normalize(mean=mean, std=std)
+
+    val_transform = transforms.Compose([
+        color_transfer,
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    val_dataset = ImageFolderInstance(data_folder, transform=val_transform)
+    # num of samples
+    n_data = len(val_dataset)
+    print('number of validation samples: {}'.format(n_data))
+    return val_dataset
 
 class ImageFolderInstance(datasets.ImageFolder):
     """Folder datasets which returns the index of the image as well
