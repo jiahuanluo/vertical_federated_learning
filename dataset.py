@@ -144,7 +144,7 @@ class Multimodal_Datasets(Dataset):
 
     def __getitem__(self, index):
         # X = (self.text[index], self.audio[index], self.vision[index])
-        X = (self.vision[index], self.text[index], self.audio[index])
+        X = (self.audio[index], self.text[index], self.vision[index])
         Y = self.labels[index]
         META = (0, 0, 0) if self.meta is None else (self.meta[index][0], self.meta[index][1], self.meta[index][2])
         if self.data == 'mosi':

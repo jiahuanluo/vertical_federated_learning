@@ -28,7 +28,6 @@ def weighted_accuracy(test_preds_emo, test_truth_emo):
 
     return (tp * (n / p) + tn) / (2 * n)
 
-
 def eval_mosei_senti(results, truths, exclude_zero=False):
     test_preds = results.view(-1).cpu().detach().numpy()
     test_truth = truths.view(-1).cpu().detach().numpy()
@@ -44,23 +43,18 @@ def eval_mosei_senti(results, truths, exclude_zero=False):
     corr = np.corrcoef(test_preds, test_truth)[0][1]
     mult_a7 = multiclass_acc(test_preds_a7, test_truth_a7)
     mult_a5 = multiclass_acc(test_preds_a5, test_truth_a5)
-    # print(test_truth)
-    # print(non_zeros)
-    # if non_zeros == []:
-    #     assert False
     f_score = metrics.f1_score((test_preds[non_zeros] > 0), (test_truth[non_zeros] > 0), average='weighted')
     binary_truth = (test_truth[non_zeros] > 0)
     binary_preds = (test_preds[non_zeros] > 0)
     acc = metrics.accuracy_score(binary_truth, binary_preds)
-    # print("MAE: ", mae)
-    # print("Correlation Coefficient: ", corr)
-    # print("mult_acc_7: ", mult_a7)
-    # print("mult_acc_5: ", mult_a5)
-    # print("F1 score: ", f_score)
-    # print("Accuracy: ", metrics.accuracy_score(binary_truth, binary_preds))
-    #
-    # print("-" * 50)
-    return torch.tensor(f_score * 100), torch.tensor(acc * 100)
+    result = {}
+    result['mae'] = mae
+    result['corr'] = corr
+    result['mult_a7'] = mult_a7
+    result['mult_a5'] = mult_a5
+    result['f_score'] = f_score
+    result['acc'] = acc
+    return result
 
 
 class AvgrageMeter(object):

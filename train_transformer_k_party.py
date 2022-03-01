@@ -19,16 +19,16 @@ parser = argparse.ArgumentParser("mosei")
 parser.add_argument('--data', required=True, help='location of the data corpus')
 parser.add_argument('--name', type=str, required=True, help='experiment name')
 parser.add_argument('--batch_size', type=int, default=32, help='batch size')
-parser.add_argument('--learning_rate', type=float, default=0.025, help='init learning rate')
+parser.add_argument('--learning_rate', type=float, default=1e-3, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=3e-5, help='weight decay')
 parser.add_argument('--report_freq', type=float, default=10, help='report frequency')
-parser.add_argument('--gpu', type=int, default=0, help='gpu device id')
+parser.add_argument('--gpu', type=int, default=1, help='gpu device id')
 parser.add_argument('--workers', type=int, default=0, help='num of workers')
 parser.add_argument('--epochs', type=int, default=100, help='num of training epochs')
 parser.add_argument('--layers', type=int, default=18, help='total number of layers')
 parser.add_argument('--seed', type=int, default=0, help='random seed')
-parser.add_argument('--grad_clip', type=float, default=5., help='gradient clipping')
+parser.add_argument('--grad_clip', type=float, default=0.8, help='gradient clipping')
 parser.add_argument('--gamma', type=float, default=0.97, help='learning rate decay')
 parser.add_argument('--decay_period', type=int, default=100, help='epochs between two learning rate decays')
 parser.add_argument('--parallel', action='store_true', default=False, help='data parallelism')
@@ -67,13 +67,13 @@ def main():
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
-        torch.cuda.set_device(args.gpu)
+        # torch.cuda.set_device(args.gpu)
         cudnn.benchmark = True
         cudnn.enabled = True
         torch.cuda.manual_seed_all(args.seed)
         logging.info('gpu device = %d' % args.gpu)
     logging.info("args = %s", args)
-    model_A = Manual_A(num_classes=1, input_dim=35, layers=args.layers, u_dim=30, k=args.k)
+    model_A = Manual_A(num_classes=1, input_dim=74, layers=args.layers, u_dim=30, k=args.k)
     if args.k == 1:
         model_list = [model_A]
     elif args.k == 2:
@@ -81,7 +81,7 @@ def main():
         model_list = [model_A, model_B]
     elif args.k == 3:
         model_B = Manual_B(input_dim=300)
-        model_C = Manual_B(input_dim=74)
+        model_C = Manual_B(input_dim=35)
         model_list = [model_A, model_B, model_C]
     else:
         assert ValueError
@@ -93,45 +93,40 @@ def main():
 
     # criterion = nn.CrossEntropyLoss()
     criterion = nn.L1Loss()
-    if args.optimizer == "sgd":
-        optimizer_list = [torch.optim.SGD(model.parameters(), args.learning_rate, momentum=args.momentum,
-                                          weight_decay=args.weight_decay) for model in model_list]
-    else:
-        optimizer_list = [torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay) for model in model_list]
+    optimizer_list = [torch.optim.Adam(model.parameters(), weight_decay=args.weight_decay) for model in model_list]
     train_data = Multimodal_Datasets(args.data, split_type='train', ratio=args.ratio)
     valid_data = Multimodal_Datasets(args.data, split_type='test')
     train_queue = torch.utils.data.DataLoader(
-        train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=True)
+        train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, drop_last=False)
 
     valid_queue = torch.utils.data.DataLoader(
-        valid_data, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, drop_last=True)
+        valid_data, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, drop_last=False)
 
-    if args.learning_rate == 0.025:
-        scheduler_list = [
-            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
-            for optimizer in optimizer_list]
-    else:
-        scheduler_list = [torch.optim.lr_scheduler.StepLR(optimizer, args.decay_period, gamma=args.gamma) for optimizer
-                          in optimizer_list]
+    scheduler_list = [
+        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=20, factor=0.1, verbose=True) for
+        optimizer in optimizer_list]
 
     best_f1 = 0
     best_acc = 0
     for epoch in range(args.epochs):
-        lr = scheduler_list[0].get_last_lr()[0]
+        # lr = scheduler_list[0].get_last_lr()[0]
+        lr = 1e-3
         logging.info('epoch %d lr %e', epoch, lr)
 
         cur_step = epoch * len(train_queue)
         writer.add_scalar('train/lr', lr, cur_step)
 
-        train_f1, train_obj = train(train_queue, model_list, criterion, optimizer_list, epoch)
-        [scheduler_list[i].step() for i in range(len(scheduler_list))]
-        logging.info('train_f1 %f', train_f1)
-
+        data_dict = train(train_queue, model_list, criterion, optimizer_list, epoch)
+        logging.info(f'train_data_dict: {data_dict}')
+        for key, value in data_dict.items():
+            writer.add_scalar(f"train/{key}", value, cur_step)
         cur_step = (epoch + 1) * len(train_queue)
+        [scheduler_list[i].step(data_dict['avg_loss']) for i in range(len(scheduler_list))]
 
-        valid_f1, valid_acc, valid_obj = infer(valid_queue, model_list, criterion, epoch, cur_step)
-        logging.info('valid_f1 %f', valid_f1)
-        logging.info('valid_acc %f', valid_acc)
+        data_dict = infer(valid_queue, model_list, criterion, epoch, cur_step)
+        logging.info(f'valid_data_dict: {data_dict}')
+        for key, value in data_dict.items():
+            writer.add_scalar(f"valid/{key}", value, cur_step)
 
         # transfer_valid_acc_top1, transfer_valid_acc_top5, transfer_valid_obj = transfer_infer(valid_queue, model_list,
         #                                                                                       criterion, epoch,
@@ -139,30 +134,28 @@ def main():
         # logging.info('transfer_valid_acc_top1 %f', transfer_valid_acc_top1)
         # logging.info('transfer_valid_acc_top5 %f', transfer_valid_acc_top5)
 
-        if valid_f1 > best_f1:
-            best_f1 = valid_f1
-        if valid_acc > best_acc:
-            best_acc = valid_acc
+        if data_dict['f_score'] > best_f1:
+            best_f1 = data_dict['f_score']
+        if data_dict['acc'] > best_acc:
+            best_acc = data_dict['acc']
         logging.info('best_f1 %f', best_f1)
         logging.info('best_acc %f', best_acc)
 
 
 def train(train_queue, model_list, criterion, optimizer_list, epoch):
     objs = utils.AvgrageMeter()
-    f1 = utils.AvgrageMeter()
-    acc = utils.AvgrageMeter()
-
     cur_step = epoch * len(train_queue)
 
     model_list = [model.train() for model in model_list]
     k = len(model_list)
-
+    results = []
+    truths = []
     for step, (trn_X, trn_y) in enumerate(train_queue):
         trn_X = [x.float().to(device) for x in trn_X]
         target = trn_y.view(-1).long().to(device)
         target = target.unsqueeze(1)
         n = target.size(0)
-        [optimizer_list[i].zero_grad() for i in range(k)]
+        [model_list[i].zero_grad() for i in range(k)]
         U_B_list = None
         U_B_clone_list = None
         if k > 1:
@@ -171,6 +164,7 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
             U_B_clone_list = [torch.autograd.Variable(U_B, requires_grad=True) for U_B in U_B_clone_list]
         logits = model_list[0](trn_X[0], U_B_clone_list)
         loss = criterion(logits, target)
+
         if k > 1:
             U_B_gradients_list = [torch.autograd.grad(loss, U_B, retain_graph=True) for U_B in U_B_clone_list]
             model_B_weights_gradients_list = [
@@ -184,31 +178,27 @@ def train(train_queue, model_list, criterion, optimizer_list, epoch):
         loss.backward()
         nn.utils.clip_grad_norm_(model_list[0].parameters(), args.grad_clip)
         optimizer_list[0].step()
-
-        prec1, prec5 = utils.eval_mosei_senti(results=logits, truths=target, exclude_zero=True)
+        results.append(logits)
+        truths.append(target)
         objs.update(loss.item(), n)
-        f1.update(prec1.item(), n)
-        acc.update(prec5.item(), n)
-
         if step % args.report_freq == 0:
             logging.info(
-                "Train: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                "Prec@(1,5) ({f1.avg:.1f}%, {acc.avg:.1f}%)".format(
-                    epoch + 1, args.epochs, step, len(train_queue) - 1, losses=objs,
-                    f1=f1, acc=acc))
+                f"Train: [{epoch + 1:2d}/{args.epochs}] Step {step:03d}/{len(train_queue) - 1:03d} Loss {objs.avg:.3f} ")
         writer.add_scalar('train/loss', objs.avg, cur_step)
-        writer.add_scalar('train/f1', f1.avg, cur_step)
-        writer.add_scalar('train/acc', acc.avg, cur_step)
         cur_step += 1
-    return f1.avg, objs.avg
+    results = torch.cat(results)
+    truths = torch.cat(truths)
+    data_dict = utils.eval_mosei_senti(results=results, truths=truths, exclude_zero=True)
+    data_dict['avg_loss'] = objs.avg
+    return data_dict
 
 
 def infer(valid_queue, model_list, criterion, epoch, cur_step):
     objs = utils.AvgrageMeter()
-    f1 = utils.AvgrageMeter()
-    acc = utils.AvgrageMeter()
     model_list = [model.eval() for model in model_list]
     k = len(model_list)
+    results = []
+    truths = []
     with torch.no_grad():
         for step, (val_X, val_y) in enumerate(valid_queue):
             val_X = [x.float().to(device) for x in val_X]
@@ -220,21 +210,19 @@ def infer(valid_queue, model_list, criterion, epoch, cur_step):
                 U_B_list = [model_list[i](val_X[i]) for i in range(1, len(model_list))]
             logits = model_list[0](val_X[0], U_B_list)
             loss = criterion(logits, target)
-            prec1, prec5 = utils.eval_mosei_senti(results=logits, truths=target, exclude_zero=True)
+            results.append(logits)
+            truths.append(target)
             objs.update(loss.item(), n)
-            f1.update(prec1.item(), n)
-            acc.update(prec5.item(), n)
-
             if step % args.report_freq == 0:
                 logging.info(
-                    "Valid: [{:2d}/{}] Step {:03d}/{:03d} Loss {losses.avg:.3f} "
-                    "Prec@(1,5) ({f1.avg:.1f}%, {acc.avg:.1f}%)".format(
-                        epoch + 1, args.epochs, step, len(valid_queue) - 1, losses=objs,
-                        f1=f1, acc=acc))
-    writer.add_scalar('valid/loss', objs.avg, cur_step)
-    writer.add_scalar('valid/f1', f1.avg, cur_step)
-    writer.add_scalar('valid/acc', acc.avg, cur_step)
-    return f1.avg, acc.avg, objs.avg
+                    f"Valid: [{epoch + 1:2d}/{args.epochs}] Step {step:03d}/{len(valid_queue) - 1:03d} Loss {objs.avg:.3f}")
+            writer.add_scalar('valid/loss', objs.avg, cur_step)
+            cur_step += 1
+    results = torch.cat(results)
+    truths = torch.cat(truths)
+    data_dict = utils.eval_mosei_senti(results=results, truths=truths, exclude_zero=True)
+    data_dict['avg_loss'] = objs.avg
+    return data_dict
 
 
 if __name__ == '__main__':
